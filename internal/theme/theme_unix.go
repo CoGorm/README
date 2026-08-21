@@ -29,11 +29,17 @@ func queryDark(timeout time.Duration) (dark, ok bool) {
 	}
 	defer term.Restore(in, state) //nolint:errcheck
 
-	if _, err := os.Stdout.WriteString("\x1b]11;?\x1b\\"); err != nil {
+	// The cursor position report is a sentinel. Terminals answer queries in the
+	// order they arrive, and nearly all of them answer this one even when they
+	// ignore OSC 11 — tmux is the common example. Its reply therefore means "no
+	// background colour is coming", which turns the usual timeout into an
+	// instant answer. Reading through to it also keeps the reply out of the
+	// pager's input, where it would arrive as a stray key press.
+	if _, err := os.Stdout.WriteString("\x1b]11;?\x1b\\\x1b[6n"); err != nil {
 		return false, false
 	}
 
-	spec, ok := readOSC(in, 11, timeout)
+	spec, ok := readReply(in, timeout)
 	if !ok {
 		return false, false
 	}
@@ -44,18 +50,17 @@ func queryDark(timeout time.Duration) (dark, ok bool) {
 	return uv.BackgroundColorEvent{Color: c}.IsDark(), true
 }
 
-// readOSC collects input until it holds a complete OSC reply for ps, or until
-// the deadline passes. It returns the reply's payload.
-func readOSC(fd, ps int, timeout time.Duration) (string, bool) {
-	prefix := []byte("\x1b]" + itoa(ps) + ";")
+// readReply collects input until the cursor position report lands or the
+// deadline passes, then reports any OSC 11 payload that came with it.
+func readReply(fd int, timeout time.Duration) (string, bool) {
 	deadline := time.Now().Add(timeout)
 
 	var buf []byte
 	chunk := make([]byte, 256)
-	for {
+	for !hasCPR(buf) {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return "", false
+			break
 		}
 		fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
 		n, err := unix.Poll(fds, int(remaining.Milliseconds()))
@@ -63,20 +68,18 @@ func readOSC(fd, ps int, timeout time.Duration) (string, bool) {
 			continue
 		}
 		if err != nil || n == 0 {
-			return "", false
+			break
 		}
 		read, err := unix.Read(fd, chunk)
 		if err == unix.EINTR {
 			continue
 		}
 		if err != nil || read <= 0 {
-			return "", false
+			break
 		}
 		buf = append(buf, chunk[:read]...)
-		if payload, done := splitOSC(buf, prefix); done {
-			return payload, true
-		}
 	}
+	return splitOSC(buf, []byte("\x1b]11;"))
 }
 
 // splitOSC pulls the payload out of an OSC reply, which ends at either a BEL or
@@ -96,14 +99,21 @@ func splitOSC(buf, prefix []byte) (string, bool) {
 	return "", false
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
+// hasCPR reports whether buf holds a cursor position report, ESC [ row ; col R.
+func hasCPR(buf []byte) bool {
+	for i := 0; i+2 < len(buf); i++ {
+		if buf[i] != 0x1b || buf[i+1] != '[' {
+			continue
+		}
+		for j := i + 2; j < len(buf); j++ {
+			c := buf[j]
+			if c == 'R' {
+				return true
+			}
+			if (c < '0' || c > '9') && c != ';' {
+				break
+			}
+		}
 	}
-	var b []byte
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
-	}
-	return string(b)
+	return false
 }

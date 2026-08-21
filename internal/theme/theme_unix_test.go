@@ -38,3 +38,28 @@ func TestQueryDarkGivesUpWithoutATerminal(t *testing.T) {
 		t.Error("queryDark claimed an answer with no terminal attached")
 	}
 }
+
+func TestHasCPR(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"plain report", "\x1b[1;1R", true},
+		{"two digit coords", "\x1b[24;90R", true},
+		{"after an osc reply", "\x1b]11;rgb:0/0/0\x07\x1b[3;7R", true},
+		{"nothing yet", "", false},
+		{"partial", "\x1b[24;", false},
+		{"osc reply only", "\x1b]11;rgb:0/0/0\x07", false},
+		{"a different final byte", "\x1b[24;90H", false},
+		{"escape with no bracket", "\x1bR", false},
+		{"stray letters between", "\x1b[24;9xR", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasCPR([]byte(tt.in)); got != tt.want {
+				t.Errorf("hasCPR(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}

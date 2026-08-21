@@ -103,3 +103,25 @@ func TestEveryAutoStyleResultRenders(t *testing.T) {
 		}
 	}
 }
+
+func TestMarkdownWrapsLinksToWidth(t *testing.T) {
+	// Glamour v2 emits OSC 8 hyperlinks, whose escape bytes must not count
+	// towards the visible width or the pager's layout drifts.
+	src := []byte("A [very long link label indeed](https://example.com/a/rather/long/path) " +
+		strings.Repeat("and more words ", 20))
+	out, err := Markdown(src, 60, "dark")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "\x1b]8;") {
+		t.Skip("this glamour build does not emit hyperlinks")
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if w := ansi.StringWidth(line); w > 60 {
+			t.Errorf("line is %d columns wide: %q", w, line)
+		}
+	}
+	if strings.Contains(ansi.Strip(out), "\x1b") {
+		t.Error("ansi.Strip left escape bytes behind, so search would see them")
+	}
+}

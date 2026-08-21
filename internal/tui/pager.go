@@ -239,9 +239,10 @@ func (m *model) scrollTo(line int) {
 	m.viewport.SetYOffset(offset)
 }
 
-// content returns the document with search matches highlighted. Highlighted
-// lines lose their original colors, which is the price of styling a substring
-// inside text that already carries ANSI escapes.
+// content returns the document with search matches highlighted. A highlighted
+// line is rebuilt from its stripped text, so it loses its own colors and
+// hyperlinks for as long as the search is active: that is the price of styling
+// a substring inside text that already carries ANSI escapes.
 func (m *model) content() string {
 	if m.query == "" || len(m.matches) == 0 {
 		return strings.Join(m.lines, "\n")

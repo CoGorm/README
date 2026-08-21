@@ -8,6 +8,8 @@ highlighting, tables, emoji, and a searchable scrollback, without leaving the sh
 
 ## Install
 
+Needs Go 1.25.8 or newer, which `GOTOOLCHAIN=auto` (the default) will fetch for you.
+
 ```sh
 go install github.com/CoGorm/README/cmd/readme@latest
 ```
@@ -69,6 +71,14 @@ readme --style notty > plain.txt
 Resizing the window reflows the document rather than just re-wrapping the old
 layout, and `--style auto` follows your terminal's light or dark background.
 
+Working that background out means asking the terminal over an OSC 11 escape
+sequence and waiting for a reply, and plenty of terminals — tmux among them —
+never reply. So the query carries a cursor position report behind it: almost
+every terminal answers *that*, and its reply means no background colour is
+coming, which ends the wait immediately. Failing both, the probe gives up after
+250ms and falls back to `$COLORFGBG`. Naming a style skips the question
+altogether, so `readme -s dark` never asks at all.
+
 ## Development
 
 ```sh
@@ -78,4 +88,5 @@ go test ./...
 - `cmd/readme` — flags, input resolution, and the decision to page or print
 - `internal/find` — locating a readme on disk
 - `internal/render` — markdown to styled text
+- `internal/theme` — the bounded terminal background probe
 - `internal/tui` — the pager

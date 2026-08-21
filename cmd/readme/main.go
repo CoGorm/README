@@ -17,6 +17,7 @@ import (
 
 	"github.com/CoGorm/README/internal/find"
 	"github.com/CoGorm/README/internal/render"
+	"github.com/CoGorm/README/internal/theme"
 	"github.com/CoGorm/README/internal/tui"
 	"golang.org/x/term"
 )
@@ -66,7 +67,9 @@ func run(argv []string) error {
 		width = detectWidth()
 	}
 
-	doc, err := render.Markdown(source, width, opts.style)
+	style, isDark := resolveStyle(opts.style)
+	draw := newRenderer(source, style, opts.width)
+	doc, err := draw(width)
 	if err != nil {
 		return err
 	}
@@ -76,13 +79,58 @@ func run(argv []string) error {
 		return nil
 	}
 
-	// Let the pager re-render on resize so the text reflows with the window.
-	return tui.Run(title, func(w int) (string, error) {
-		if opts.width != 0 {
-			w = opts.width
+	// The pager re-renders on resize so the text reflows with the window.
+	return tui.Run(title, isDark, draw)
+}
+
+// resolveStyle turns the --style flag into a concrete glamour style, plus
+// whether the pager's own chrome should be drawn for a dark background.
+//
+// Only "auto" costs anything: it asks the terminal for its background colour
+// and waits up to theme.Timeout for an answer. Naming a style skips the
+// question entirely, which is the fast path on terminals that never reply.
+func resolveStyle(flag string) (style string, isDark bool) {
+	if flag != "" && flag != "auto" {
+		return flag, render.IsDarkStyle(flag)
+	}
+
+	outIsTerminal := isTerminal(os.Stdout)
+	isDark = true // termenv's old default, and the safer guess for a terminal
+	if outIsTerminal {
+		if dark, ok := theme.Dark(); ok {
+			isDark = dark
 		}
-		return render.Markdown(source, clampWidth(w), opts.style)
-	})
+	}
+	return render.AutoStyle(outIsTerminal, isDark), isDark
+}
+
+// newRenderer returns a render function that remembers its last result.
+//
+// The pager asks for the document as soon as it learns the window size, which
+// is the width we just rendered for the fits check, and it asks again on every
+// resize even when only the height changed. Glamour is the expensive part of
+// startup on a large README — roughly 150ms for a 100KB file — so caching the
+// last width turns those repeats into nothing.
+func newRenderer(source []byte, style string, fixedWidth int) tui.RenderFunc {
+	var (
+		lastWidth int
+		lastDoc   string
+	)
+	return func(width int) (string, error) {
+		if fixedWidth != 0 {
+			width = fixedWidth // an explicit --width ignores the window
+		}
+		width = clampWidth(width)
+		if width == lastWidth {
+			return lastDoc, nil
+		}
+		doc, err := render.Markdown(source, width, style)
+		if err != nil {
+			return "", err
+		}
+		lastWidth, lastDoc = width, doc
+		return doc, nil
+	}
 }
 
 // readSource resolves the arguments into a display title and markdown bytes,

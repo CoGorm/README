@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -112,5 +113,50 @@ func TestClampWidth(t *testing.T) {
 	}
 	if got := clampWidth(72); got != 72 {
 		t.Errorf("clampWidth(72) = %d, want 72", got)
+	}
+}
+
+func TestRendererCachesByWidth(t *testing.T) {
+	source := []byte("# hi\n\nsome text\n")
+	draw := newRenderer(source, "notty", 0)
+
+	first, err := draw(80)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	same, err := draw(80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same != first {
+		t.Error("the same width produced a different document")
+	}
+
+	wider, err := draw(60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wider == first {
+		t.Error("a new width returned the cached document")
+	}
+	if back, _ := draw(80); back != first {
+		t.Error("returning to a previous width did not reproduce its document")
+	}
+}
+
+func TestRendererHonoursExplicitWidth(t *testing.T) {
+	source := []byte(strings.Repeat("word ", 100))
+	draw := newRenderer(source, "notty", 50)
+
+	// The window size must not override --width.
+	fixed, err := draw(120)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(fixed, "\n") {
+		if len(line) > 50 {
+			t.Fatalf("line is %d columns, want <= 50: %q", len(line), line)
+		}
 	}
 }

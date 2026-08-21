@@ -1,22 +1,12 @@
 package tui
 
 import (
-	"os"
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/muesli/termenv"
 )
-
-// Tests run without a terminal, where lipgloss would otherwise strip every
-// escape sequence and make the highlighting assertions vacuous.
-func TestMain(m *testing.M) {
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	os.Exit(m.Run())
-}
 
 // newTestModel builds a pager over doc, sized as if the terminal were 80x24.
 func newTestModel(t *testing.T, doc string) *model {
@@ -25,6 +15,7 @@ func newTestModel(t *testing.T, doc string) *model {
 		title:  "test.md",
 		render: func(int) (string, error) { return doc, nil },
 		input:  newInput(),
+		style:  newStyles(true),
 	}
 	if cmd := m.resize(80, 24); cmd != nil {
 		t.Fatalf("resize returned %v, want nil", cmd)
@@ -32,18 +23,19 @@ func newTestModel(t *testing.T, doc string) *model {
 	return m
 }
 
-// press feeds a key to the model the way bubbletea would.
+// press feeds keys to the model the way bubbletea would: one message per key,
+// with multi-character strings typed a rune at a time.
 func press(m *model, s string) {
-	var msg tea.KeyMsg
 	switch s {
 	case "enter":
-		msg = tea.KeyMsg{Type: tea.KeyEnter}
+		m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	case "esc":
-		msg = tea.KeyMsg{Type: tea.KeyEsc}
+		m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	default:
-		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+		for _, r := range s {
+			m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		}
 	}
-	m.Update(msg)
 }
 
 func numberedDoc(n int) string {
@@ -122,7 +114,7 @@ func TestSearchScrollsTheMatchIntoView(t *testing.T) {
 		t.Fatalf("found %d matches, want 1", len(m.matches))
 	}
 	line := m.matches[0]
-	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
+	top, bottom := m.viewport.YOffset(), m.viewport.YOffset()+m.viewport.Height()
 	if line < top || line >= bottom {
 		t.Errorf("match on line %d is outside the visible range [%d,%d)", line, top, bottom)
 	}
@@ -152,11 +144,11 @@ func TestNavigationKeys(t *testing.T) {
 	m := newTestModel(t, numberedDoc(200))
 
 	press(m, "j")
-	if m.viewport.YOffset == 0 {
+	if m.viewport.YOffset() == 0 {
 		t.Error("j did not scroll down")
 	}
 	press(m, "k")
-	if m.viewport.YOffset != 0 {
+	if m.viewport.YOffset() != 0 {
 		t.Error("k did not scroll back up")
 	}
 	press(m, "G")
@@ -171,18 +163,18 @@ func TestNavigationKeys(t *testing.T) {
 
 func TestHelpTogglesWithoutLosingViewportLines(t *testing.T) {
 	m := newTestModel(t, numberedDoc(200))
-	full := m.viewport.Height
+	full := m.viewport.Height()
 
 	press(m, "?")
 	if !m.showHelp {
 		t.Fatal("? did not turn help on")
 	}
-	if m.viewport.Height != full-1 {
-		t.Errorf("help line should cost exactly one row: %d -> %d", full, m.viewport.Height)
+	if m.viewport.Height() != full-1 {
+		t.Errorf("help line should cost exactly one row: %d -> %d", full, m.viewport.Height())
 	}
 	press(m, "?")
-	if m.viewport.Height != full {
-		t.Errorf("hiding help did not restore the viewport: %d, want %d", m.viewport.Height, full)
+	if m.viewport.Height() != full {
+		t.Errorf("hiding help did not restore the viewport: %d, want %d", m.viewport.Height(), full)
 	}
 }
 
@@ -192,7 +184,7 @@ func TestViewFitsTheTerminal(t *testing.T) {
 		for _, k := range keys {
 			press(m, k)
 		}
-		view := m.View()
+		view := m.View().Content
 		if lines := strings.Count(view, "\n") + 1; lines != 24 {
 			t.Errorf("after %v the view is %d lines, want 24", keys, lines)
 		}

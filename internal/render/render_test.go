@@ -61,3 +61,45 @@ func TestMarkdownRendersEmoji(t *testing.T) {
 		t.Errorf("emoji shortcode was not expanded: %q", out)
 	}
 }
+
+func TestAutoStyle(t *testing.T) {
+	tests := []struct {
+		terminal, dark bool
+		want           string
+	}{
+		{true, true, "dark"},
+		{true, false, "light"},
+		{false, true, "notty"},
+		{false, false, "notty"},
+	}
+	for _, tt := range tests {
+		if got := AutoStyle(tt.terminal, tt.dark); got != tt.want {
+			t.Errorf("AutoStyle(terminal=%v, dark=%v) = %s, want %s", tt.terminal, tt.dark, got, tt.want)
+		}
+	}
+}
+
+func TestIsDarkStyle(t *testing.T) {
+	for _, style := range []string{"dark", "dracula", "tokyo-night", "notty", "my-theme.json"} {
+		if !IsDarkStyle(style) {
+			t.Errorf("IsDarkStyle(%q) = false, want true", style)
+		}
+	}
+	for _, style := range []string{"light", "ascii"} {
+		if IsDarkStyle(style) {
+			t.Errorf("IsDarkStyle(%q) = true, want false", style)
+		}
+	}
+}
+
+func TestEveryAutoStyleResultRenders(t *testing.T) {
+	// AutoStyle must only ever name styles Markdown accepts.
+	for _, terminal := range []bool{true, false} {
+		for _, dark := range []bool{true, false} {
+			style := AutoStyle(terminal, dark)
+			if _, err := Markdown([]byte("# hi"), 80, style); err != nil {
+				t.Errorf("style %q from AutoStyle: %v", style, err)
+			}
+		}
+	}
+}

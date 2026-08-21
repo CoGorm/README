@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -17,20 +17,16 @@ import (
 // calls it again whenever the terminal is resized so the text reflows.
 type RenderFunc func(width int) (string, error)
 
-// Run displays doc in an alternate-screen pager until the user quits.
-func Run(title string, render RenderFunc) error {
-	// Resolve the terminal background before bubbletea takes over stdin: the
-	// detection is an escape-sequence query whose reply we must read ourselves,
-	// and lipgloss caches the answer for every later Render.
-	_ = lipgloss.HasDarkBackground()
-
+// Run displays a document in an alternate-screen pager until the user quits.
+// isDark selects the chrome that suits the terminal background.
+func Run(title string, isDark bool, render RenderFunc) error {
 	m := &model{
 		title:  title,
 		render: render,
 		input:  newInput(),
+		style:  newStyles(isDark),
 	}
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	if _, err := p.Run(); err != nil {
+	if _, err := tea.NewProgram(m).Run(); err != nil {
 		return err
 	}
 	return m.err
@@ -67,6 +63,7 @@ var keys = keyMap{
 type model struct {
 	title  string
 	render RenderFunc
+	style  styles
 
 	viewport viewport.Model
 	input    textinput.Model
@@ -92,7 +89,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		return m, m.resize(msg.Width, msg.Height)
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if m.searching {
 			return m, m.updateSearch(msg)
 		}
@@ -112,8 +109,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.Search):
 			m.searching = true
 			m.input.SetValue("")
-			m.input.Focus()
-			return m, textinput.Blink
+			return m, m.input.Focus()
 		case key.Matches(msg, keys.Next):
 			m.jump(1)
 			return m, nil
@@ -129,7 +125,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // updateSearch handles keys while the search prompt is open.
-func (m *model) updateSearch(msg tea.KeyMsg) tea.Cmd {
+func (m *model) updateSearch(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc", "ctrl+c":
 		m.searching = false
@@ -173,18 +169,19 @@ func (m *model) resize(width, height int) tea.Cmd {
 
 // layout sizes the viewport to whatever space the header and footer leave.
 func (m *model) layout() {
-	m.input.Width = m.width - 4
+	m.input.SetWidth(m.width - 4)
 
 	body := m.height - lipgloss.Height(m.header()) - lipgloss.Height(m.footer())
 	if body < 1 {
 		body = 1
 	}
 	if !m.ready {
-		m.viewport = viewport.New(m.width, body)
+		m.viewport = viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(body))
 		m.ready = true
 		return
 	}
-	m.viewport.Width, m.viewport.Height = m.width, body
+	m.viewport.SetWidth(m.width)
+	m.viewport.SetHeight(body)
 }
 
 // setQuery recomputes the match set for a new query, keeping the viewport
@@ -220,7 +217,7 @@ func (m *model) jump(delta int) {
 	if delta == 0 {
 		m.current = 0
 		for i, line := range m.matches {
-			if line >= m.viewport.YOffset {
+			if line >= m.viewport.YOffset() {
 				m.current = i
 				break
 			}
@@ -235,7 +232,7 @@ func (m *model) jump(delta int) {
 // scrollTo brings line into view, resting it a third of the way down the
 // viewport so surrounding context stays visible.
 func (m *model) scrollTo(line int) {
-	offset := line - m.viewport.Height/3
+	offset := line - m.viewport.Height()/3
 	if offset < 0 {
 		offset = 0
 	}
@@ -252,46 +249,51 @@ func (m *model) content() string {
 	out := make([]string, len(m.lines))
 	copy(out, m.lines)
 	for i, line := range m.matches {
-		out[line] = highlight(ansi.Strip(m.lines[line]), m.query, i == m.current)
+		out[line] = m.highlight(ansi.Strip(m.lines[line]), i == m.current)
 	}
 	return strings.Join(out, "\n")
 }
 
-// highlight styles every occurrence of query within a plain-text line.
-func highlight(line, query string, current bool) string {
-	style := matchStyle
+// highlight styles every occurrence of the query within a plain-text line.
+func (m *model) highlight(line string, current bool) string {
+	style := m.style.match
 	if current {
-		style = currentMatchStyle
+		style = m.style.currentMatch
 	}
 	var b strings.Builder
 	rest := line
 	for {
-		i := strings.Index(strings.ToLower(rest), strings.ToLower(query))
+		i := strings.Index(strings.ToLower(rest), strings.ToLower(m.query))
 		if i < 0 {
 			b.WriteString(rest)
 			return b.String()
 		}
 		b.WriteString(rest[:i])
-		b.WriteString(style.Render(rest[i : i+len(query)]))
-		rest = rest[i+len(query):]
+		b.WriteString(style.Render(rest[i : i+len(m.query)]))
+		rest = rest[i+len(m.query):]
 	}
 }
 
-func (m *model) View() string {
+func (m *model) View() tea.View {
+	view := tea.NewView("")
+	view.AltScreen = true
+	view.MouseMode = tea.MouseModeCellMotion
 	if !m.ready {
-		return "\n  loading…"
+		view.SetContent("\n  loading…")
+		return view
 	}
-	return m.header() + "\n" + m.viewport.View() + "\n" + m.footer()
+	view.SetContent(m.header() + "\n" + m.viewport.View() + "\n" + m.footer())
+	return view
 }
 
 func (m *model) header() string {
 	// Keep room for at least a sliver of bar so the title never wraps.
-	title := titleStyle.Render(ansi.Truncate(m.title, max(m.width-6, 1), "…"))
+	title := m.style.title.Render(ansi.Truncate(m.title, max(m.width-6, 1), "…"))
 	gap := m.width - lipgloss.Width(title)
 	if gap < 0 {
 		gap = 0
 	}
-	return title + barStyle.Render(strings.Repeat(" ", gap))
+	return title + m.style.bar.Render(strings.Repeat(" ", gap))
 }
 
 func (m *model) footer() string {
@@ -305,7 +307,7 @@ func (m *model) footer() string {
 	// The help gets its own line; squeezing it beside the status truncates it
 	// on anything narrower than a very wide terminal.
 	help := "j/k scroll · d/u half page · g/G top/bottom · / search · n/N next/prev · q quit"
-	return hintStyle.Width(m.width).Render(" "+ansi.Truncate(help, max(m.width-2, 1), "…")) + "\n" + bottom
+	return m.style.hint.Width(m.width).Render(" "+ansi.Truncate(help, max(m.width-2, 1), "…")) + "\n" + bottom
 }
 
 // statusBar is the bottom line: a hint on the left, position and search state
@@ -320,11 +322,11 @@ func (m *model) statusBar() string {
 		}
 	}
 
-	right := statusStyle.Render(" " + status + " ")
-	left := hintStyle.Render(" ? help ")
+	right := m.style.status.Render(" " + status + " ")
+	left := m.style.hint.Render(" ? help ")
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 0 {
 		left, gap = "", max(m.width-lipgloss.Width(right), 0)
 	}
-	return left + barStyle.Render(strings.Repeat(" ", gap)) + right
+	return left + m.style.bar.Render(strings.Repeat(" ", gap)) + right
 }
